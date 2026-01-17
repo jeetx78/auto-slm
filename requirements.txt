@@ -1,0 +1,27 @@
+# Core
+click
+pydantic
+python-dotenv
+
+# Backend / API
+fastapi
+uvicorn
+
+# ML / LLM
+torch
+transformers
+accelerate
+peft
+bitsandbytes
+
+# Data & RAG
+datasets
+sentence-transformers
+faiss-cpu
+
+# Hugging Face
+huggingface_hub
+
+# Supabase
+supabase
+postgrest

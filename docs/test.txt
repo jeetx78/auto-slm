@@ -1,0 +1,4 @@
+Auto-SLM is a system designed to automate the creation of small language models.
+It focuses on data ingestion, task inference, and efficient fine-tuning.
+The goal is to reduce cost, complexity, and time to production.
+

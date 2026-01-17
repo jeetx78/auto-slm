@@ -1,0 +1,12 @@
+pyproject.toml
+autoslm/__init__.py
+autoslm/cli.py
+autoslm/supabase_client.py
+autoslm.egg-info/PKG-INFO
+autoslm.egg-info/SOURCES.txt
+autoslm.egg-info/dependency_links.txt
+autoslm.egg-info/entry_points.txt
+autoslm.egg-info/requires.txt
+autoslm.egg-info/top_level.txt
+autoslm/data/__init__.py
+autoslm/data/ingest.py
