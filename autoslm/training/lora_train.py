@@ -1,6 +1,5 @@
 import os
 import torch
-from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -9,44 +8,37 @@ from transformers import (
     DataCollatorForLanguageModeling,
 )
 from peft import LoraConfig, get_peft_model
+from datasets import load_dataset
 
-# =========================
-# CONFIG
-# =========================
 BASE_MODEL = "microsoft/Phi-3-mini-4k-instruct"
 DATASET_PATH = "artifacts/dataset.jsonl"
 OUTPUT_DIR = "artifacts/adapter"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-
 def main():
-    # -------------------------
-    # Tokenizer
-    # -------------------------
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+
+    print("Device:", device)
+    print("Dtype:", dtype)
+
     tokenizer = AutoTokenizer.from_pretrained(
         BASE_MODEL,
         trust_remote_code=True,
     )
     tokenizer.pad_token = tokenizer.eos_token
 
-    # -------------------------
-    # Base model (GPU + FP16)
-    # -------------------------
     model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
-        torch_dtype=torch.float16,
-        device_map="auto",
+        torch_dtype=dtype,
+        device_map=device,
         trust_remote_code=True,
-        attn_implementation="eager",  # IMPORTANT for Phi-3 stability
     )
 
-    # REQUIRED: disable KV cache for training
+    # 🔑 CRITICAL FIX
     model.config.use_cache = False
 
-    # -------------------------
-    # LoRA config (Phi-3 compatible)
-    # -------------------------
     lora_config = LoraConfig(
         r=8,
         lora_alpha=16,
@@ -59,13 +51,7 @@ def main():
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    # -------------------------
-    # Dataset
-    # -------------------------
-    dataset = load_dataset(
-        "json",
-        data_files={"train": DATASET_PATH},
-    )
+    dataset = load_dataset("json", data_files=DATASET_PATH)
 
     def tokenize(batch):
         tokens = tokenizer(
@@ -88,42 +74,31 @@ def main():
         mlm=False,
     )
 
-    # -------------------------
-    # Training arguments
-    # -------------------------
-    training_args = TrainingArguments(
+    args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
-        num_train_epochs=1,          # increase later
+        num_train_epochs=1,
         logging_steps=1,
         save_strategy="epoch",
-        fp16=True,
         report_to="none",
-        optim="adamw_torch",
+        fp16=(device == "cuda"),
+        bf16=False,
     )
 
-    # -------------------------
-    # Trainer
-    # -------------------------
     trainer = Trainer(
         model=model,
-        args=training_args,
+        args=args,
         train_dataset=tokenized,
         data_collator=data_collator,
     )
 
-    # -------------------------
-    # Train
-    # -------------------------
     trainer.train()
 
-    # -------------------------
-    # Save adapter
-    # -------------------------
     model.save_pretrained(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
 
+    print("✅ LoRA training completed successfully")
 
 if __name__ == "__main__":
     main()
