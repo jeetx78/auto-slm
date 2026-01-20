@@ -1,0 +1,72 @@
+body {
+    font-family: system-ui, sans-serif;
+    background: #0f172a;
+    color: #e5e7eb;
+    display: flex;
+    justify-content: center;
+    padding: 40px;
+}
+
+.app {
+    width: 700px;
+    background: #020617;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+}
+
+h1 {
+    margin: 0;
+}
+
+.subtitle {
+    color: #94a3b8;
+    margin-bottom: 16px;
+}
+
+.chat {
+    height: 420px;
+    overflow-y: auto;
+    background: #020617;
+    border: 1px solid #1e293b;
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+.msg {
+    margin-bottom: 10px;
+}
+
+.user {
+    color: #38bdf8;
+}
+
+.bot {
+    color: #a7f3d0;
+}
+
+.input-area {
+    display: flex;
+    gap: 8px;
+}
+
+textarea {
+    flex: 1;
+    background: #020617;
+    color: white;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 10px;
+    resize: none;
+    height: 60px;
+}
+
+button {
+    background: #22c55e;
+    border: none;
+    border-radius: 8px;
+    padding: 0 16px;
+    font-weight: bold;
+    cursor: pointer;
+}
