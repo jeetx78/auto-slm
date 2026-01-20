@@ -1,9 +1,27 @@
 import torch
+import faiss
+import pickle
 from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
+from sentence_transformers import SentenceTransformer
+import os
 
+print("🔥 SERVE.PY LOADED FROM:", __file__)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RAG_DIR = os.path.join(BASE_DIR, "rag", "rag_docs")
+INDEX_PATH = os.path.join(RAG_DIR, "index.faiss")
+META_PATH = os.path.join(RAG_DIR, "meta.pkl")
+
+
+# --- Hard validation (fail fast, readable) ---
+if not os.path.exists(INDEX_PATH):
+    raise RuntimeError(f"FAISS index not found at: {INDEX_PATH}")
+
+if not os.path.exists(META_PATH):
+    raise RuntimeError(f"RAG metadata not found at: {META_PATH}")
 # =====================
 # CONFIG
 # =====================
@@ -11,108 +29,95 @@ BASE_MODEL = "microsoft/Phi-3-mini-4k-instruct"
 ADAPTER_PATH = "artifacts/adapter"
 
 # =====================
-# FASTAPI APP
+# APP
 # =====================
-app = FastAPI(title="Auto-SLM")
+app = FastAPI(title="Auto-SLM + RAG")
 
-# =====================
-# REQUEST SCHEMA
-# =====================
 class InferRequest(BaseModel):
     prompt: str
     max_new_tokens: int = 128
 
 # =====================
-# DEVICE + DTYPE
+# DEVICE
 # =====================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 
-print("=================================")
-print("🚀 Auto-SLM starting")
-print("Device:", DEVICE)
-print("Dtype:", DTYPE)
-print("=================================")
+# =====================
+# LOAD RAG
+# =====================
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+index = faiss.read_index(INDEX_PATH)
+
+with open(META_PATH, "rb") as f:
+    chunks = pickle.load(f)
 
 # =====================
-# TOKENIZER
+# TOKENIZER + MODEL
 # =====================
-tokenizer = AutoTokenizer.from_pretrained(
-    BASE_MODEL,
-    trust_remote_code=True
-)
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
 
-# =====================
-# BASE MODEL
-# =====================
 base_model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
     torch_dtype=DTYPE,
     device_map=DEVICE,
-    trust_remote_code=True
+    trust_remote_code=True,
 )
 
-# 🔴 CRITICAL FIX FOR PHI-3
 base_model.config.use_cache = False
 
-# =====================
-# LOAD LoRA ADAPTER
-# =====================
-model = PeftModel.from_pretrained(
-    base_model,
-    ADAPTER_PATH
-)
-
+model = PeftModel.from_pretrained(base_model, ADAPTER_PATH)
 model.eval()
 
 # =====================
-# HEALTH CHECK
+# HEALTH
 # =====================
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 # =====================
-# INFERENCE (BULLETPROOF)
+# INFER WITH RAG
 # =====================
 @app.post("/infer")
 def infer(req: InferRequest):
     try:
-        # Tokenize
-        inputs = tokenizer(
-            req.prompt,
-            return_tensors="pt"
-        )
+        # ---- RETRIEVE ----
+        q_emb = embedder.encode([req.prompt])
+        _, I = index.search(q_emb, k=3)
+        context = "\n".join([chunks[i] for i in I[0]])
 
-        # Safe device move
+        # ---- PROMPT ----
+        prompt = f"""
+Use the context below to answer the question.
+Only use the provided context.
+
+Context:
+{context}
+
+Question:
+{req.prompt}
+
+Answer:
+"""
+
+        inputs = tokenizer(prompt, return_tensors="pt")
         device = list(model.parameters())[0].device
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
-        # Generate (CACHE OFF)
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=req.max_new_tokens,
-                temperature=0.7,
-                do_sample=True,
-                use_cache=False,   # 🔴 ABSOLUTELY REQUIRED
+                temperature=0.2,
+                do_sample=False,
+                use_cache=False,
             )
 
-        text = tokenizer.decode(
-            outputs[0],
-            skip_special_tokens=True
-        )
+        text = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-        return {
-            "success": True,
-            "response": text
-        }
+        return {"success": True, "response": text}
 
     except Exception as e:
-        # ALWAYS JSON
-        return {
-            "success": False,
-            "error": str(e),
-            "type": type(e).__name__
-        }
+        return {"success": False, "error": str(e)}
