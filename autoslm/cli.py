@@ -14,7 +14,23 @@ def cli():
     """Auto-SLM: Automatic Small Language Model Factory"""
     pass
 
-
+@cli.group()
+def rag():
+    """RAG (Retrieval-Augmented Generation) commands"""
+    pass
+@rag.command("add")
+@click.option("--project-id", required=True)
+@click.option("--path", required=True, help="Path to text file or directory")
+def rag_add(project_id, path):
+    from autoslm.rag.build_index import build_index_for_project
+    
+    if not os.path.exists(path):
+        raise click.ClickException(f"Path does not exist: {path}")
+    
+    build_index_for_project(
+        project_id=project_id,
+        source_path=path)
+    click.echo(f"✅ RAG data added for project: {project_id}")
 # ------------------------
 # INIT COMMAND
 # ------------------------
