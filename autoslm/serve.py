@@ -1,8 +1,5 @@
 import os
 import torch
-import faiss
-import pickle
-
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -11,39 +8,23 @@ from transformers import (
     AutoModelForCausalLM,
     BitsAndBytesConfig,
 )
-
 from peft import PeftModel
-from sentence_transformers import SentenceTransformer
+
+from autoslm.rag.manager import RAGManager
 
 # =====================================================
-# PATHS (ABSOLUTE, SAFE)
+# BASIC SETUP
 # =====================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-RAG_DIR = os.path.join(BASE_DIR, "rag", "rag_docs")
-INDEX_PATH = os.path.join(RAG_DIR, "index.faiss")
-META_PATH = os.path.join(RAG_DIR, "meta.pkl")
-
 ADAPTER_PATH = os.path.abspath(
     os.path.join(BASE_DIR, "..", "artifacts", "adapter")
 )
 
-# =====================================================
-# FAIL FAST
-# =====================================================
-for path, name in [
-    (INDEX_PATH, "FAISS index"),
-    (META_PATH, "RAG metadata"),
-    (ADAPTER_PATH, "LoRA adapter"),
-]:
-    if not os.path.exists(path):
-        raise RuntimeError(f"❌ Missing {name}: {path}")
+if not os.path.exists(ADAPTER_PATH):
+    raise RuntimeError(f"❌ LoRA adapter not found: {ADAPTER_PATH}")
 
-print("✅ All required files found")
+print("✅ Adapter found")
 
-# =====================================================
-# CONFIG
-# =====================================================
 BASE_MODEL = "microsoft/Phi-3-mini-4k-instruct"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -55,27 +36,19 @@ print(f"🧠 Dtype: {DTYPE}")
 # =====================================================
 # FASTAPI
 # =====================================================
-app = FastAPI(title="Auto-SLM (LoRA + RAG)")
+app = FastAPI(title="Auto-SLM (Multi-Project RAG + LoRA)")
 
 class InferRequest(BaseModel):
+    project_id: str
     prompt: str
     max_new_tokens: int = 64
 
 # =====================================================
-# LOAD RAG (FAST)
+# LOAD RAG MANAGER (MULTI-PROJECT)
 # =====================================================
-print("📥 Loading RAG...")
-embedder = SentenceTransformer(
-    "all-MiniLM-L6-v2",
-    device=DEVICE,
-)
-
-index = faiss.read_index(INDEX_PATH)
-
-with open(META_PATH, "rb") as f:
-    chunks: list[str] = pickle.load(f)
-
-print(f"✅ RAG ready ({len(chunks)} chunks)")
+print("📥 Initializing RAG Manager...")
+rag = RAGManager()
+print("✅ RAG Manager ready")
 
 # =====================================================
 # TOKENIZER
@@ -87,7 +60,7 @@ tokenizer = AutoTokenizer.from_pretrained(
 tokenizer.pad_token = tokenizer.eos_token
 
 # =====================================================
-# LOAD MODEL (4-BIT, SAFE FOR PHI-3)
+# LOAD MODEL (4-BIT + LORA)
 # =====================================================
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -112,7 +85,7 @@ print("🧩 Loading LoRA adapter...")
 model = PeftModel.from_pretrained(base_model, ADAPTER_PATH)
 model.eval()
 
-print("✅ Model loaded")
+print("✅ Model fully loaded")
 
 # =====================================================
 # ROUTES
@@ -124,27 +97,34 @@ def health():
 @app.post("/infer")
 def infer(req: InferRequest):
     try:
-        # ---------------------------
-        # RETRIEVE (FAST)
-        # ---------------------------
-        q_emb = embedder.encode(
-            req.prompt,
-            normalize_embeddings=True,
+        # -------------------------------------------------
+        # 1️⃣ RETRIEVE CONTEXT (PROJECT-SCOPED)
+        # -------------------------------------------------
+        contexts = rag.retrieve(
+            project_id=req.project_id,
+            query=req.prompt,
+            k=3,
         )
 
-        _, idxs = index.search(q_emb.reshape(1, -1), k=3)
-        context = "\n".join(chunks[i] for i in idxs[0])
+        context_text = "\n".join(contexts)
 
-        # ---------------------------
-        # PROMPT
-        # ---------------------------
-        prompt = (
-            "Answer using ONLY the context.\n"
-            "If the answer is missing, say: Not found in documents.\n\n"
-            f"Context:\n{context}\n\n"
-            f"Question:\n{req.prompt}\n\n"
-            "Answer:"
-        )
+        # -------------------------------------------------
+        # 2️⃣ BUILD PROMPT
+        # -------------------------------------------------
+        prompt = f"""You are Auto-SLM.
+
+Answer ONLY using the context below.
+If the answer is not present, say:
+"Not found in documents."
+
+Context:
+{context_text}
+
+Question:
+{req.prompt}
+
+Answer:
+"""
 
         inputs = tokenizer(
             prompt,
@@ -156,28 +136,29 @@ def infer(req: InferRequest):
         device = next(model.parameters()).device
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
-        # ---------------------------
-        # GENERATION (DETERMINISTIC)
-        # ---------------------------
+        # -------------------------------------------------
+        # 3️⃣ GENERATE (DETERMINISTIC, SAFE)
+        # -------------------------------------------------
         with torch.no_grad():
-            output = model.generate(
+            outputs = model.generate(
                 **inputs,
                 max_new_tokens=req.max_new_tokens,
                 do_sample=False,
                 repetition_penalty=1.1,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.eos_token_id,
-                use_cache=False,  # 🚨 IMPORTANT
+                use_cache=False,  # 🚨 CRITICAL FOR PHI-3
             )
 
-        text = tokenizer.decode(
-            output[0],
+        answer = tokenizer.decode(
+            outputs[0],
             skip_special_tokens=True,
         )
 
         return {
             "success": True,
-            "response": text.strip(),
+            "project_id": req.project_id,
+            "answer": answer.strip(),
         }
 
     except Exception as e:

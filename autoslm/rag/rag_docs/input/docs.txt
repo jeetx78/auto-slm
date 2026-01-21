@@ -1,2 +1,0 @@
-Auto-SLM is a system that automatically builds, fine-tunes, and serves small language models.
-It supports LoRA, RAG, and API-based inference.
