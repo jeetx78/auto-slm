@@ -1,42 +1,57 @@
-import os
-import faiss
-import pickle
+import os, faiss, pickle
 from sentence_transformers import SentenceTransformer
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECTS_DIR = os.path.join(BASE_DIR, "projects")
-
+from typing import List
 
 class RAGManager:
-    def __init__(self):
+    def __init__(self, base_dir="autoslm/rag/rag_docs"):
+        self.base_dir = base_dir
+        os.makedirs(base_dir, exist_ok=True)
+
+        self.index_path = os.path.join(base_dir, "index.faiss")
+        self.meta_path = os.path.join(base_dir, "meta.pkl")
+
         self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
-        self.cache = {}  # project_id -> (index, chunks)
 
-    def _project_dir(self, project_id: str):
-        return os.path.join(PROJECTS_DIR, project_id)
+        if os.path.exists(self.index_path):
+            self.index = faiss.read_index(self.index_path)
+            with open(self.meta_path, "rb") as f:
+                self.chunks = pickle.load(f)
+        else:
+            self.index = faiss.IndexFlatIP(384)
+            self.chunks = []
 
-    def load(self, project_id: str):
-        if project_id in self.cache:
-            return
+    def _save(self):
+        faiss.write_index(self.index, self.index_path)
+        with open(self.meta_path, "wb") as f:
+            pickle.dump(self.chunks, f)
 
-        pdir = self._project_dir(project_id)
-        index_path = os.path.join(pdir, "index.faiss")
-        meta_path = os.path.join(pdir, "meta.pkl")
+    def add_documents(self, project_id: str, texts: List[str]):
+        docs = []
+        for text in texts:
+            for chunk in text.split("\n\n"):
+                if len(chunk.strip()) > 50:
+                    docs.append(f"[{project_id}] {chunk.strip()}")
 
-        if not os.path.exists(index_path):
-            raise RuntimeError(f"No RAG index for project {project_id}")
+        embeddings = self.embedder.encode(
+            docs,
+            normalize_embeddings=True
+        )
 
-        index = faiss.read_index(index_path)
-        with open(meta_path, "rb") as f:
-            chunks = pickle.load(f)
+        self.index.add(embeddings)
+        self.chunks.extend(docs)
+        self._save()
 
-        self.cache[project_id] = (index, chunks)
+    def search(self, project_id: str, query: str, k=3):
+        q_emb = self.embedder.encode(
+            [query],
+            normalize_embeddings=True
+        )
 
-    def query(self, project_id: str, query: str, k: int = 3) -> str:
-        self.load(project_id)
+        _, idxs = self.index.search(q_emb, k)
+        results = []
 
-        index, chunks = self.cache[project_id]
-        emb = self.embedder.encode([query], normalize_embeddings=True)
-        _, I = index.search(emb, k)
+        for i in idxs[0]:
+            if self.chunks[i].startswith(f"[{project_id}]"):
+                results.append(self.chunks[i])
 
-        return "\n".join(chunks[i] for i in I[0])
+        return results[:k]
