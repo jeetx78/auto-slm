@@ -13,6 +13,12 @@ from pydantic import BaseModel
 from autoslm.supabase_client import supabase
 from autoslm.rag.manager import RAGManager
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
