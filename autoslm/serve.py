@@ -1,6 +1,13 @@
-import os
 import torch
-from fastapi import FastAPI, UploadFile
+import threading
+from fastapi import (
+    FastAPI,
+    Depends,
+    Header,
+    HTTPException,
+    UploadFile,
+)
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from autoslm.supabase_client import supabase
@@ -10,42 +17,29 @@ from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     BitsAndBytesConfig,
+    TextIteratorStreamer,
 )
 from peft import PeftModel
 
-# ======================================================
+# =====================================================
 # APP
-# ======================================================
-app = FastAPI(title="Auto-SLM (Multi-Project RAG)")
+# =====================================================
+app = FastAPI(title="Auto-SLM (Streaming + RAG + LoRA)")
+rag = RAGManager()  # ❌ removed load_from_db()
 
-rag = RAGManager()
-
-# ======================================================
-# MODEL CONFIG
-# ======================================================
+# =====================================================
+# MODEL
+# =====================================================
 BASE_MODEL = "microsoft/Phi-3-mini-4k-instruct"
-ADAPTER_PATH = os.path.abspath("artifacts/adapter")
+ADAPTER_PATH = "artifacts/adapter"
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-# ======================================================
-# LOAD TOKENIZER
-# ======================================================
 tokenizer = AutoTokenizer.from_pretrained(
     BASE_MODEL,
     trust_remote_code=True,
 )
 tokenizer.pad_token = tokenizer.eos_token
 
-# ======================================================
-# LOAD MODEL (4-BIT SAFE)
-# ======================================================
-bnb = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_compute_dtype=torch.float16,
-)
+bnb = BitsAndBytesConfig(load_in_4bit=True)
 
 base_model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
@@ -54,90 +48,101 @@ base_model = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=True,
 )
 
-# 🔴 REQUIRED for Phi-3 stability
+# REQUIRED FOR PHI-3
 base_model.config.use_cache = False
 base_model.config.pretraining_tp = 1
 
 model = PeftModel.from_pretrained(base_model, ADAPTER_PATH)
 model.eval()
 
-# ======================================================
-# SCHEMAS
-# ======================================================
-class InferRequest(BaseModel):
-    project_id: str
-    prompt: str
-    max_new_tokens: int = 64
+# =====================================================
+# AUTH
+# =====================================================
+def get_user(authorization: str = Header(...)):
+    token = authorization.replace("Bearer ", "")
+    user = supabase.auth.get_user(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return user.user
 
-class PasteTextRequest(BaseModel):
+def verify_project(project_id: str, user):
+    res = supabase.table("projects").select("id").eq(
+        "id", project_id
+    ).eq(
+        "owner_id", user.id
+    ).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+# =====================================================
+# SCHEMAS
+# =====================================================
+class AddDocs(BaseModel):
     project_id: str
     text: str
 
-# ======================================================
-# HEALTH
-# ======================================================
+class Infer(BaseModel):
+    project_id: str
+    prompt: str
+    max_new_tokens: int = 128
+
+# =====================================================
+# ROUTES
+# =====================================================
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-# ======================================================
-# ADD TEXT (CHATGPT STYLE PASTE)
-# ======================================================
-@app.post("/projects/{project_id}/text")
-def add_text(project_id: str, req: PasteTextRequest):
-    # store raw text
+# ---------- ADD DOCUMENT (PASTE TEXT) ----------
+@app.post("/add")
+def add_docs(req: AddDocs, user=Depends(get_user)):
+    verify_project(req.project_id, user)
+
     supabase.table("documents").insert({
-        "project_id": project_id,
-        "filename": "pasted_text",
-        "content": req.text
+        "project_id": req.project_id,
+        "owner_id": user.id,
+        "content": req.text,
     }).execute()
 
-    # update RAG
-    rag.add_documents(project_id, [req.text])
-
+    rag.add_documents(req.project_id, [req.text])
     return {"success": True}
 
-# ======================================================
-# UPLOAD FILES
-# ======================================================
+# ---------- UPLOAD FILES ----------
 @app.post("/projects/{project_id}/documents")
-async def upload_docs(project_id: str, files: list[UploadFile]):
-    texts = []
+async def upload_docs(
+    project_id: str,
+    files: list[UploadFile],
+    user=Depends(get_user),
+):
+    verify_project(project_id, user)
 
+    texts = []
     for f in files:
-        raw = (await f.read()).decode("utf-8", errors="ignore")
+        content = (await f.read()).decode("utf-8")
+        texts.append(content)
 
         supabase.table("documents").insert({
             "project_id": project_id,
-            "filename": f.filename,
-            "content": raw,
+            "owner_id": user.id,
+            "content": content,
         }).execute()
 
-        texts.append(raw)
-
     rag.add_documents(project_id, texts)
-
     return {"success": True, "files": len(files)}
 
-# ======================================================
-# INFER
-# ======================================================
-@app.post("/infer")
-def infer(req: InferRequest):
-    try:
-        chunks = rag.search(req.project_id, req.prompt, k=3)
+# ---------- STREAMING INFERENCE ----------
+@app.post("/infer/stream")
+def infer_stream(req: Infer, user=Depends(get_user)):
+    verify_project(req.project_id, user)
 
-        if not chunks:
-            return {
-                "success": True,
-                "response": "Not found in documents."
-            }
+    retrieved = rag.search(req.project_id, req.prompt)
 
-        context = "\n".join(chunks)
-
+    if retrieved:
+        context = "\n".join(retrieved)
         prompt = f"""
-Answer ONLY using the context below.
-If not found, say: Not found in documents.
+Answer ONLY using the context.
+If missing, say "Not found".
 
 Context:
 {context}
@@ -147,36 +152,36 @@ Question:
 
 Answer:
 """
+    else:
+        prompt = req.prompt
 
-        inputs = tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=2048,
-        )
+    inputs = tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=2048,
+    ).to(model.device)
 
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    streamer = TextIteratorStreamer(
+        tokenizer,
+        skip_prompt=True,
+        skip_special_tokens=True,
+    )
 
-        with torch.no_grad():
-            output = model.generate(
-                **inputs,
-                max_new_tokens=req.max_new_tokens,
-                do_sample=False,
-                repetition_penalty=1.1,
-                use_cache=False,
-            )
+    thread = threading.Thread(
+        target=model.generate,
+        kwargs=dict(
+            **inputs,
+            max_new_tokens=req.max_new_tokens,
+            do_sample=False,
+            streamer=streamer,
+            use_cache=False,
+            eos_token_id=tokenizer.eos_token_id,
+        ),
+    )
+    thread.start()
 
-        return {
-            "success": True,
-            "response": tokenizer.decode(
-                output[0],
-                skip_special_tokens=True
-            )
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "type": type(e).__name__,
-        }
+    return StreamingResponse(
+        (token for token in streamer),
+        media_type="text/plain",
+    )

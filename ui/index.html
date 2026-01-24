@@ -1,26 +1,83 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 
 <head>
-    <meta charset="UTF-8" />
     <title>Auto-SLM</title>
-    <link rel="stylesheet" href="style.css" />
+    <style>
+        body {
+            font-family: Arial;
+            margin: 20px
+        }
+
+        textarea {
+            width: 100%;
+            height: 120px
+        }
+
+        #chat {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto
+        }
+    </style>
 </head>
 
 <body>
-    <div class="app">
-        <h1>⚡ Auto-SLM</h1>
-        <p class="subtitle">Small Language Model + RAG</p>
 
-        <div class="chat" id="chat"></div>
+    <h2>Auto-SLM</h2>
 
-        <div class="input-area">
-            <textarea id="prompt" placeholder="Ask something…"></textarea>
-            <button onclick="send()">Send</button>
-        </div>
-    </div>
+    <label>Project ID</label>
+    <input id="project" value="demo" />
 
-    <script src="app.js"></script>
+    <h3>Add Knowledge (Paste)</h3>
+    <textarea id="doc"></textarea>
+    <button onclick="add()">Add</button>
+
+    <h3>Chat</h3>
+    <div id="chat"></div>
+
+    <textarea id="prompt"></textarea>
+    <button onclick="ask()">Ask</button>
+
+    <script>
+        function add() {
+            fetch("/add", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    project_id: document.getElementById("project").value,
+                    text: document.getElementById("doc").value
+                })
+            });
+        }
+
+        async function ask() {
+            const chat = document.getElementById("chat");
+            chat.innerHTML += "<b>You:</b> " + prompt.value + "<br>";
+
+            const res = await fetch("/infer", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    project_id: project.value,
+                    prompt: prompt.value
+                })
+            });
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+
+            chat.innerHTML += "<b>AI:</b> ";
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                chat.innerHTML += decoder.decode(value);
+                chat.scrollTop = chat.scrollHeight;
+            }
+        }
+    </script>
+
 </body>
 
 </html>

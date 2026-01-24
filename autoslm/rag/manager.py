@@ -1,40 +1,36 @@
-import os
 import faiss
-import pickle
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from collections import defaultdict
+from autoslm.rag.embedder import Embedder
 
 class RAGManager:
-    def __init__(self, dim=384):
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.rag_dir = os.path.join(self.base_dir, "rag_docs")
+    def __init__(self):
+        self.embedder = Embedder()
+        self.indexes = {}
+        self.texts = defaultdict(list)
 
-        os.makedirs(self.rag_dir, exist_ok=True)
+    def _get_index(self, project_id: str):
+        if project_id not in self.indexes:
+            self.indexes[project_id] = faiss.IndexFlatIP(384)
+        return self.indexes[project_id]
 
-        self.index_path = os.path.join(self.rag_dir, "index.faiss")
-        self.meta_path = os.path.join(self.rag_dir, "meta.pkl")
+    def add_documents(self, project_id: str, docs: list[str]):
+        embeddings = self.embedder.embed(docs)
+        index = self._get_index(project_id)
 
-        self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
-        self.dim = dim
+        index.add(np.array(embeddings))
+        self.texts[project_id].extend(docs)
 
-        if os.path.exists(self.index_path):
-            self.index = faiss.read_index(self.index_path)
-            with open(self.meta_path, "rb") as f:
-                self.chunks = pickle.load(f)
-        else:
-            self.index = faiss.IndexFlatIP(dim)
-            self.chunks = []
+    def search(self, project_id: str, query: str, k: int = 3):
+        if project_id not in self.indexes:
+            return []
 
-    def add_text(self, text: str):
-        emb = self.embedder.encode([text], normalize_embeddings=True)
-        self.index.add(np.array(emb))
-        self.chunks.append(text)
+        q_emb = self.embedder.embed([query])
+        index = self.indexes[project_id]
 
-        faiss.write_index(self.index, self.index_path)
-        with open(self.meta_path, "wb") as f:
-            pickle.dump(self.chunks, f)
-
-    def search(self, query: str, k=3):
-        q_emb = self.embedder.encode([query], normalize_embeddings=True)
-        _, idxs = self.index.search(q_emb, k)
-        return [self.chunks[i] for i in idxs[0]]
+        _, idxs = index.search(q_emb, k)
+        return [
+            self.texts[project_id][i]
+            for i in idxs[0]
+            if i < len(self.texts[project_id])
+        ]
