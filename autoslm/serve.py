@@ -1,3 +1,4 @@
+import os
 import torch
 import threading
 from fastapi import (
@@ -16,7 +17,6 @@ from autoslm.rag.manager import RAGManager
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 from transformers import (
@@ -31,6 +31,8 @@ from peft import PeftModel
 # APP
 # =====================================================
 app = FastAPI(title="Auto-SLM (Streaming + RAG + LoRA)")
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 rag = RAGManager()  # ❌ removed load_from_db()
 
 # =====================================================
