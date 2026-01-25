@@ -15,8 +15,12 @@ class RAGManager:
         return self.indexes[project_id]
 
     def add_documents(self, project_id: str, docs: list[str]):
-        embeddings = self.embedder.embed(docs)
         index = self._get_index(project_id)
+        all_chunks = []
+        for doc in docs:
+            chunks=chunk_text(doc)
+            all_chunks.append(doc)
+        embeddings = self.embedder.embed(all_chunks)
 
         index.add(np.array(embeddings))
         self.texts[project_id].extend(docs)
@@ -25,7 +29,7 @@ class RAGManager:
         if project_id not in self.indexes:
             return []
 
-        q_emb = self.embedder.embed([query])
+        q_emb = np.array(self.embedder.embed([query]))
         index = self.indexes[project_id]
 
         _, idxs = index.search(q_emb, k)
