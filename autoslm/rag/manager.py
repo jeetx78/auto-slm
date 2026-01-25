@@ -2,7 +2,7 @@ import faiss
 import numpy as np
 from collections import defaultdict
 from autoslm.rag.embedder import Embedder
-
+from autoslm.rag.chunker import chunk_text
 class RAGManager:
     def __init__(self):
         self.embedder = Embedder()

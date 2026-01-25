@@ -1,106 +1,89 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 
 <head>
-    <meta charset="UTF-8" />
+    <meta charset="utf-8" />
     <title>Auto-SLM</title>
     <style>
         body {
-            font-family: Arial;
-            padding: 20px;
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: auto;
         }
 
         textarea,
         input {
             width: 100%;
-            margin: 8px 0;
+            margin-top: 8px;
         }
 
         button {
-            padding: 8px 16px;
-            margin: 4px 0;
+            margin-top: 8px;
         }
 
         pre {
             background: #111;
             color: #0f0;
             padding: 10px;
-            height: 200px;
-            overflow: auto;
         }
     </style>
 </head>
 
 <body>
 
-    <h2>Auto-SLM</h2>
+    <h2>Auto-SLM (RAG)</h2>
 
-    <h3>Add Document</h3>
-    <input id="projectId" placeholder="project_id" />
-    <textarea id="docText" rows="4" placeholder="Paste document text"></textarea>
-    <button id="addBtn">Add Document</button>
+    <label>Project ID</label>
+    <input id="project" value="demo" />
 
-    <h3>Chat</h3>
-    <textarea id="prompt" rows="3" placeholder="Ask something"></textarea>
-    <button id="chatBtn">Ask</button>
+    <h3>Add Knowledge</h3>
+    <textarea id="doc" rows="6" placeholder="Paste any text here..."></textarea>
+    <button onclick="addDoc()">Add</button>
 
-    <pre id="output"></pre>
+    <h3>Ask Question</h3>
+    <textarea id="question" rows="3"></textarea>
+    <button onclick="chat()">Ask</button>
+
+    <h3>Answer</h3>
+    <pre id="out"></pre>
 
     <script>
-        /* =========================
-           GLOBAL CONFIG (SAFE)
-        ========================= */
-        const API_BASE = window.location.origin;
-        console.log("API_BASE:", API_BASE);
+        // IMPORTANT: this must be your ngrok URL
+        const API = window.location.origin;
 
-        /* =========================
-           ADD DOCUMENT
-        ========================= */
         async function addDoc() {
-            const projectId = document.getElementById("projectId").value;
-            const text = document.getElementById("docText").value;
-
-            const res = await fetch(`${API_BASE}/add`, {
+            const res = await fetch(API + "/add", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ project_id: projectId, text })
+                body: JSON.stringify({
+                    project_id: document.getElementById("project").value,
+                    text: document.getElementById("doc").value
+                })
             });
-
-            const data = await res.json();
-            document.getElementById("output").textContent =
-                JSON.stringify(data, null, 2);
+            alert("Document added");
         }
 
-        /* =========================
-           STREAM CHAT
-        ========================= */
         async function chat() {
-            const projectId = document.getElementById("projectId").value;
-            const prompt = document.getElementById("prompt").value;
+            document.getElementById("out").textContent = "";
 
-            const res = await fetch(`${API_BASE}/infer/stream`, {
+            const res = await fetch(API + "/infer/stream", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ project_id: projectId, prompt })
+                body: JSON.stringify({
+                    project_id: document.getElementById("project").value,
+                    prompt: document.getElementById("question").value
+                })
             });
 
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
-            const out = document.getElementById("output");
-            out.textContent = "";
 
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
-                out.textContent += decoder.decode(value);
+                document.getElementById("out").textContent += decoder.decode(value);
             }
         }
-
-        /* =========================
-           BUTTON WIRING (NO INLINE)
-        ========================= */
-        document.getElementById("addBtn").onclick = addDoc;
-        document.getElementById("chatBtn").onclick = chat;
     </script>
 
 </body>
