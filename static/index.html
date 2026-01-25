@@ -1,176 +1,108 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
     <meta charset="UTF-8" />
     <title>Auto-SLM</title>
-    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
     <style>
         body {
-            font-family: system-ui;
-            max-width: 900px;
-            margin: auto;
+            font-family: Arial;
             padding: 20px;
-            background: #0f172a;
-            color: #e5e7eb;
         }
 
         textarea,
-        input,
-        button {
+        input {
             width: 100%;
-            margin-top: 8px;
-            padding: 10px;
-            border-radius: 6px;
-            border: none;
-        }
-
-        textarea {
-            height: 120px;
+            margin: 8px 0;
         }
 
         button {
-            background: #2563eb;
-            color: white;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background: #1d4ed8;
+            padding: 8px 16px;
+            margin: 4px 0;
         }
 
         pre {
-            background: #020617;
-            padding: 12px;
-            white-space: pre-wrap;
-            border-radius: 6px;
-            min-height: 120px;
-        }
-
-        .box {
-            margin-top: 20px;
-            padding: 16px;
-            border: 1px solid #1e293b;
-            border-radius: 8px;
+            background: #111;
+            color: #0f0;
+            padding: 10px;
+            height: 200px;
+            overflow: auto;
         }
     </style>
 </head>
 
 <body>
-    <h1>🤖 Auto-SLM</h1>
 
-    <div class="box">
-        <h3>🔐 Login</h3>
-        <input id="email" placeholder="Email" />
-        <input id="password" type="password" placeholder="Password" />
-        <button onclick="login()">Login</button>
-    </div>
+    <h2>Auto-SLM</h2>
 
-    <div class="box">
-        <h3>📁 Project</h3>
-        <input id="projectId" placeholder="Project ID" />
-    </div>
+    <h3>Add Document</h3>
+    <input id="projectId" placeholder="project_id" />
+    <textarea id="docText" rows="4" placeholder="Paste document text"></textarea>
+    <button id="addBtn">Add Document</button>
 
-    <div class="box">
-        <h3>📄 Add Knowledge (RAG)</h3>
-        <textarea id="docText" placeholder="Paste text here..."></textarea>
-        <button onclick="addDoc()">Add to Project</button>
-    </div>
+    <h3>Chat</h3>
+    <textarea id="prompt" rows="3" placeholder="Ask something"></textarea>
+    <button id="chatBtn">Ask</button>
 
-    <div class="box">
-        <h3>💬 Chat</h3>
-        <textarea id="prompt" placeholder="Ask something..."></textarea>
-        <button onclick="chat()">Ask</button>
-        <pre id="response"></pre>
-    </div>
+    <pre id="output"></pre>
 
     <script>
-        // 🔑 SUPABASE CONFIG
-        const SUPABASE_URL = "https://wppysjezmzxzmywgsojm.supabase.co";
-        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwcHlzamV6bXp4em15d2dzb2ptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgxMTA5MjMsImV4cCI6MjA4MzY4NjkyM30.qOofxGmM2X5Xm2w_-W_tAr33aIPHZ2GKI26By5ZUM6Q";
+        /* =========================
+           GLOBAL CONFIG (SAFE)
+        ========================= */
+        const API_BASE = window.location.origin;
+        console.log("API_BASE:", API_BASE);
 
-        const supabase = supabasejs.createClient(
-            SUPABASE_URL,
-            SUPABASE_ANON_KEY
-        );
-
-        let accessToken = null;
-
-        async function login() {
-            const email = email.value;
-            const password = password.value;
-
-            const { data, error } = await supabase.auth.signInWithPassword({
-                email,
-                password
-            });
-
-            if (error) {
-                alert(error.message);
-                return;
-            }
-
-            accessToken = data.session.access_token;
-            alert("Logged in");
-        }
-
+        /* =========================
+           ADD DOCUMENT
+        ========================= */
         async function addDoc() {
-            const projectId = projectIdInput();
-            const text = docText.value;
+            const projectId = document.getElementById("projectId").value;
+            const text = document.getElementById("docText").value;
 
-            await fetch("/add", {
+            const res = await fetch(`${API_BASE}/add`, {
                 method: "POST",
-                headers: authHeaders(),
-                body: JSON.stringify({
-                    project_id: projectId,
-                    text
-                })
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ project_id: projectId, text })
             });
 
-            alert("Document added");
+            const data = await res.json();
+            document.getElementById("output").textContent =
+                JSON.stringify(data, null, 2);
         }
 
+        /* =========================
+           STREAM CHAT
+        ========================= */
         async function chat() {
-            const projectId = projectIdInput();
+            const projectId = document.getElementById("projectId").value;
             const prompt = document.getElementById("prompt").value;
-            const output = document.getElementById("response");
-            output.textContent = "";
 
-            const res = await fetch("/infer/stream", {
+            const res = await fetch(`${API_BASE}/infer/stream`, {
                 method: "POST",
-                headers: authHeaders(),
-                body: JSON.stringify({
-                    project_id: projectId,
-                    prompt
-                })
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ project_id: projectId, prompt })
             });
 
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
+            const out = document.getElementById("output");
+            out.textContent = "";
 
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
-                output.textContent += decoder.decode(value);
+                out.textContent += decoder.decode(value);
             }
         }
 
-        function authHeaders() {
-            return {
-                "Content-Type": "application/json",
-                "Authorization": "Bearer " + accessToken
-            };
-        }
-
-        function projectIdInput() {
-            const v = document.getElementById("projectId").value;
-            if (!v) {
-                alert("Project ID required");
-                throw "No project";
-            }
-            return v;
-        }
+        /* =========================
+           BUTTON WIRING (NO INLINE)
+        ========================= */
+        document.getElementById("addBtn").onclick = addDoc;
+        document.getElementById("chatBtn").onclick = chat;
     </script>
+
 </body>
 
 </html>
